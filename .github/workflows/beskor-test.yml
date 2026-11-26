@@ -1,0 +1,59 @@
+name: Beskor API Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Datenbankverbindung testen
+        env:
+          BESKOR_API_KEY: ${{ secrets.BESKOR_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os, json, urllib.request, urllib.error
+
+          key = os.environ["BESKOR_API_KEY"]
+          base = "https://beskor.net/api/v1/archeage/"
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+          opener = urllib.request.build_opener(NoRedirect())
+          auth = {"X-API-Key": key}
+
+          def fetch(resource, headers):
+              req = urllib.request.Request(
+                  base + resource + "/?limit=1",
+                  headers={"Accept": "application/json", **headers}
+              )
+              with opener.open(req, timeout=30) as response:
+                  return json.load(response)
+
+          def schema(value, depth=0):
+              if depth >= 5:
+                  return type(value).__name__
+              if isinstance(value, dict):
+                  return {k: schema(v, depth+1)
+                          for k, v in value.items()}
+              if isinstance(value, list):
+                  return [schema(value[0], depth+1)] if value else []
+              return type(value).__name__
+
+          for resource in ["items", "recipes"]:
+              try:
+                  data = fetch(resource, auth)
+              except urllib.error.HTTPError as error:
+                  if error.code not in (401, 403):
+                      raise RuntimeError(f"HTTP {error.code}") from None
+                  auth = {"Authorization": "Bearer " + key}
+                  data = fetch(resource, auth)
+
+              print(resource + ": Verbindung erfolgreich")
+              print(json.dumps(schema(data), indent=2))
+          PY
