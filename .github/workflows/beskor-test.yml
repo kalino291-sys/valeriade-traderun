@@ -10,14 +10,17 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Datenbankverbindung testen
+      - name: API-Verbindung pruefen
         env:
           BESKOR_API_KEY: ${{ secrets.BESKOR_API_KEY }}
         run: |
           python3 - <<'PY'
-          import os, json, urllib.request, urllib.error
+          import os
+          import json
+          import urllib.request
+          import urllib.error
 
-          key = os.environ["BESKOR_API_KEY"]
+          key = os.environ.get("BESKOR_API_KEY", "").strip()
           base = "https://beskor.net/api/v1/archeage/"
 
           class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -25,35 +28,49 @@ jobs:
                   return None
 
           opener = urllib.request.build_opener(NoRedirect())
-          auth = {"X-API-Key": key}
 
-          def fetch(resource, headers):
+          def test(name, path, authenticated=False):
+              headers = {
+                  "Accept": "application/json",
+                  "User-Agent": "ValeriaDE-Tools/4.0"
+              }
+              if authenticated:
+                  headers["Authorization"] = "Bearer " + key
+
               req = urllib.request.Request(
-                  base + resource + "/?limit=1",
-                  headers={"Accept": "application/json", **headers}
+                  base + path, headers=headers
               )
-              with opener.open(req, timeout=30) as response:
-                  return json.load(response)
 
-          def schema(value, depth=0):
-              if depth >= 5:
-                  return type(value).__name__
-              if isinstance(value, dict):
-                  return {k: schema(v, depth+1)
-                          for k, v in value.items()}
-              if isinstance(value, list):
-                  return [schema(value[0], depth+1)] if value else []
-              return type(value).__name__
+              print("\nTEST:", name)
 
-          for resource in ["items", "recipes"]:
               try:
-                  data = fetch(resource, auth)
-              except urllib.error.HTTPError as error:
-                  if error.code not in (401, 403):
-                      raise RuntimeError(f"HTTP {error.code}") from None
-                  auth = {"Authorization": "Bearer " + key}
-                  data = fetch(resource, auth)
+                  with opener.open(req, timeout=30) as response:
+                      data = json.load(response)
+                      print("HTTP:", response.status)
+                      print("Total:", data.get("total"))
+                      print("Pages:", data.get("pages"))
+                      records = data.get("data", [])
+                      if records and isinstance(records[0], dict):
+                          print("Felder:", list(records[0].keys()))
+                      return True
 
-              print(resource + ": Verbindung erfolgreich")
-              print(json.dumps(schema(data), indent=2))
+              except urllib.error.HTTPError as error:
+                  print("HTTP:", error.code)
+                  print("Content-Type:", error.headers.get("Content-Type"))
+                  print("Server:", error.headers.get("Server"))
+                  print("CF-Mitigated:", error.headers.get("CF-Mitigated"))
+                  return False
+
+          print("API-Key vorhanden:", bool(key))
+          print("API-Key Format korrekt:", key.startswith("bsk_"))
+
+          test("Oeffentlicher Zugang", "")
+          if not key:
+              raise SystemExit("API-Key fehlt")
+
+          items = test("Items", "items/?limit=100&page=1", True)
+          recipes = test("Rezepte", "recipes/?limit=100&page=1", True)
+
+          if not (items and recipes):
+              raise SystemExit(1)
           PY
